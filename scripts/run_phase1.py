@@ -26,18 +26,28 @@ from pathlib import Path
 import joblib
 import numpy as np
 import pandas as pd
-import torch
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
 from krauss.data.study_periods import build_study_periods, study_periods_summary
 from krauss.data.features import FEATURE_COLS
 from krauss.models.rf_phase1 import build_rf_model, train_rf, predict_rf
-from krauss.models.xgb_phase1 import build_xgb_model, train_xgb, predict_xgb
-from krauss.models.dnn_phase1 import build_dnn_model, train_dnn, predict_dnn
 from krauss.models.ensembles_phase1 import (
     ens1_predictions, ens2_predictions, ens3_predictions,
 )
+
+# XGBoost and PyTorch both use libomp, which is not fork-safe on macOS.
+# Importing either before RF's n_jobs=-1 loky fork causes segfaults.
+# Defer all libomp-dependent imports until after RF completes.
+
+def _import_xgb():
+    from krauss.models.xgb_phase1 import build_xgb_model, train_xgb, predict_xgb
+    return build_xgb_model, train_xgb, predict_xgb
+
+def _import_dnn():
+    import torch
+    from krauss.models.dnn_phase1 import build_dnn_model, train_dnn, predict_dnn
+    return build_dnn_model, train_dnn, predict_dnn, torch
 
 ROOT = Path(__file__).resolve().parent.parent
 PROCESSED = ROOT / "data" / "processed"
@@ -125,35 +135,128 @@ def run_period(
     result = trade_panel[["date", "permno"]].copy()
     result["period_id"] = period_id
 
-    # Train/predict/save each model sequentially
+    # On macOS, sklearn (loky), xgboost, and torch all use libomp which is
+    # not fork-safe. Running any two in the same process causes segfaults.
+    # Solution: each model runs as a separate subprocess via subprocess.run.
+    # Data is passed through temp parquet files in the model directory.
+    import subprocess
+
     p_rf_train = p_xgb_train = p_dnn_train = None
 
-    if run_rf:
+    # Save panels for subprocesses to read
+    train_panel.to_parquet(model_dir / "_train_panel.parquet", index=False)
+    trade_panel.to_parquet(model_dir / "_trade_panel.parquet", index=False)
+
+    src_path = str(ROOT / "src")
+
+    def _run_model_subprocess(model_name, script):
+        """Run a model training script in an isolated subprocess."""
         t1 = time.time()
-        rf = build_rf_model()
-        rf = train_rf(rf, train_panel, y_train)
-        result["p_rf"] = predict_rf(rf, trade_panel)
-        p_rf_train = predict_rf(rf, train_panel)
-        joblib.dump(rf, model_dir / "rf.pkl")
-        print(f"    RF:  {time.time()-t1:.1f}s -> {model_dir.name}/rf.pkl")
+        proc = subprocess.Popen(
+            [sys.executable, "-u", "-c", script],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+        )
+        # Stream stdout in real-time
+        for line in proc.stdout:
+            print(f"      {line}", end="", flush=True)
+        proc.wait()
+        elapsed = time.time() - t1
+        if proc.returncode != 0:
+            stderr = proc.stderr.read()
+            print(f"    {model_name} STDERR: {stderr}")
+            raise RuntimeError(f"{model_name} subprocess failed (exit {proc.returncode})")
+        print(f"    {model_name}: {elapsed:.1f}s -> {model_dir.name}/")
+        return elapsed
+
+    # Per-model caching: if model file exists, just re-predict from it.
+    # If not, train from scratch. This avoids retraining unchanged models.
+
+    if run_rf:
+        rf_path = model_dir / "rf.pkl"
+        if rf_path.exists():
+            # Load existing model and predict
+            _run_model_subprocess("RF (cached model)", f"""
+import sys; sys.path.insert(0, {src_path!r})
+import joblib, pandas as pd
+from krauss.models.rf_phase1 import predict_rf
+tp = pd.read_parquet({str(model_dir / '_train_panel.parquet')!r})
+tdp = pd.read_parquet({str(model_dir / '_trade_panel.parquet')!r})
+rf = joblib.load({str(rf_path)!r})
+pd.DataFrame({{'p': predict_rf(rf, tdp)}}).to_parquet({str(model_dir / '_rf_trade.parquet')!r}, index=False)
+pd.DataFrame({{'p': predict_rf(rf, tp)}}).to_parquet({str(model_dir / '_rf_train.parquet')!r}, index=False)
+""")
+        else:
+            _run_model_subprocess("RF", f"""
+import sys; sys.path.insert(0, {src_path!r})
+import joblib, pandas as pd
+from krauss.models.rf_phase1 import build_rf_model, train_rf, predict_rf
+tp = pd.read_parquet({str(model_dir / '_train_panel.parquet')!r})
+tdp = pd.read_parquet({str(model_dir / '_trade_panel.parquet')!r})
+rf = build_rf_model()
+rf = train_rf(rf, tp, tp['y_binary'])
+pd.DataFrame({{'p': predict_rf(rf, tdp)}}).to_parquet({str(model_dir / '_rf_trade.parquet')!r}, index=False)
+pd.DataFrame({{'p': predict_rf(rf, tp)}}).to_parquet({str(model_dir / '_rf_train.parquet')!r}, index=False)
+joblib.dump(rf, {str(model_dir / 'rf.pkl')!r})
+""")
+        result["p_rf"] = pd.read_parquet(model_dir / "_rf_trade.parquet")["p"].values
+        p_rf_train = pd.read_parquet(model_dir / "_rf_train.parquet")["p"].values
 
     if run_xgb:
-        t1 = time.time()
-        xgb_model = build_xgb_model()
-        xgb_model = train_xgb(xgb_model, train_panel, y_train)
-        result["p_xgb"] = predict_xgb(xgb_model, trade_panel)
-        p_xgb_train = predict_xgb(xgb_model, train_panel)
-        xgb_model.save_model(str(model_dir / "xgb.json"))
-        print(f"    XGB: {time.time()-t1:.1f}s -> {model_dir.name}/xgb.json")
+        xgb_path = model_dir / "xgb.json"
+        if xgb_path.exists():
+            _run_model_subprocess("XGB (cached model)", f"""
+import sys; sys.path.insert(0, {src_path!r})
+import pandas as pd, xgboost as xgb
+from krauss.data.features import FEATURE_COLS
+tp = pd.read_parquet({str(model_dir / '_train_panel.parquet')!r})
+tdp = pd.read_parquet({str(model_dir / '_trade_panel.parquet')!r})
+m = xgb.XGBClassifier()
+m.load_model({str(xgb_path)!r})
+pd.DataFrame({{'p': m.predict_proba(tdp[FEATURE_COLS])[:, 1]}}).to_parquet({str(model_dir / '_xgb_trade.parquet')!r}, index=False)
+pd.DataFrame({{'p': m.predict_proba(tp[FEATURE_COLS])[:, 1]}}).to_parquet({str(model_dir / '_xgb_train.parquet')!r}, index=False)
+""")
+        else:
+            _run_model_subprocess("XGB", f"""
+import sys; sys.path.insert(0, {src_path!r})
+import pandas as pd
+from krauss.models.xgb_phase1 import build_xgb_model, train_xgb, predict_xgb
+tp = pd.read_parquet({str(model_dir / '_train_panel.parquet')!r})
+tdp = pd.read_parquet({str(model_dir / '_trade_panel.parquet')!r})
+m = build_xgb_model()
+m = train_xgb(m, tp, tp['y_binary'])
+pd.DataFrame({{'p': predict_xgb(m, tdp)}}).to_parquet({str(model_dir / '_xgb_trade.parquet')!r}, index=False)
+pd.DataFrame({{'p': predict_xgb(m, tp)}}).to_parquet({str(model_dir / '_xgb_train.parquet')!r}, index=False)
+m.save_model({str(model_dir / 'xgb.json')!r})
+""")
+        result["p_xgb"] = pd.read_parquet(model_dir / "_xgb_trade.parquet")["p"].values
+        p_xgb_train = pd.read_parquet(model_dir / "_xgb_train.parquet")["p"].values
 
     if run_dnn:
-        t1 = time.time()
-        dnn = build_dnn_model()
-        dnn = train_dnn(dnn, train_panel, y_train)
-        result["p_dnn"] = predict_dnn(dnn, trade_panel)
-        p_dnn_train = predict_dnn(dnn, train_panel)
-        torch.save(dnn.state_dict(), model_dir / "dnn.pt")
-        print(f"    DNN: {time.time()-t1:.1f}s -> {model_dir.name}/dnn.pt")
+        dnn_path = model_dir / "dnn.pt"
+        # Always retrain DNN (model architecture may have changed)
+        _run_model_subprocess("DNN", f"""
+import sys; sys.path.insert(0, {src_path!r})
+print('DNN subprocess started', flush=True)
+import pandas as pd, torch
+from krauss.models.dnn_phase1 import build_dnn_model, train_dnn, predict_dnn
+tp = pd.read_parquet({str(model_dir / '_train_panel.parquet')!r})
+tdp = pd.read_parquet({str(model_dir / '_trade_panel.parquet')!r})
+print(f'DNN data loaded: train={{len(tp)}}, trade={{len(tdp)}}', flush=True)
+dnn = build_dnn_model()
+print('DNN model built, starting training...', flush=True)
+dnn = train_dnn(dnn, tp, tp['y_binary'])
+pd.DataFrame({{'p': predict_dnn(dnn, tdp)}}).to_parquet({str(model_dir / '_dnn_trade.parquet')!r}, index=False)
+pd.DataFrame({{'p': predict_dnn(dnn, tp)}}).to_parquet({str(model_dir / '_dnn_train.parquet')!r}, index=False)
+torch.save(dnn.state_dict(), {str(model_dir / 'dnn.pt')!r})
+print('DNN done', flush=True)
+""")
+        result["p_dnn"] = pd.read_parquet(model_dir / "_dnn_trade.parquet")["p"].values
+        p_dnn_train = pd.read_parquet(model_dir / "_dnn_train.parquet")["p"].values
+
+    # Clean up temp files (keep model files and prediction cache)
+    for f in [model_dir / "_train_panel.parquet", model_dir / "_trade_panel.parquet"]:
+        if f.exists():
+            f.unlink()
 
     # ---- Ensembles ----
     if run_rf and run_xgb and run_dnn:
@@ -224,7 +327,23 @@ def main():
     # Run each period
     from tqdm import tqdm
     all_results = []
-    for pid in tqdm(period_ids, desc="Study periods", unit="period"):
+
+    # Load any previously completed periods (resume support)
+    for pid in period_ids:
+        pred_path = MODELS / f"period_{pid:02d}" / "predictions.parquet"
+        if pred_path.exists():
+            all_results.append(pd.read_parquet(pred_path))
+            print(f"  Period {pid}: loaded from cache")
+
+    completed = {r["period_id"].iloc[0] for r in all_results}
+    remaining = [pid for pid in period_ids if pid not in completed]
+
+    if remaining:
+        print(f"  {len(completed)} cached, {len(remaining)} remaining\n")
+    else:
+        print(f"  All {len(completed)} periods cached, nothing to run\n")
+
+    for pid in tqdm(remaining, desc="Study periods", unit="period"):
         sp = periods[pid]
         print(f"\n--- Period {pid}: trade {sp.trade_start.date()} "
               f"to {sp.trade_end.date()} ---")
@@ -234,7 +353,11 @@ def main():
         )
         all_results.append(result)
 
-    # Combine and save consolidated predictions
+        # Save consolidated after each period so progress is never lost
+        all_so_far = pd.concat(all_results, ignore_index=True)
+        all_so_far.to_parquet(PROCESSED / "predictions_phase1.parquet", index=False)
+
+    # Final consolidated save
     predictions = pd.concat(all_results, ignore_index=True)
     out_path = PROCESSED / "predictions_phase1.parquet"
     predictions.to_parquet(out_path, index=False)

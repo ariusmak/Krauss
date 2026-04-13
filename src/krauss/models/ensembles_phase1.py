@@ -73,23 +73,29 @@ def ens3_predictions(
     p_raf_train: np.ndarray,
 ) -> np.ndarray:
     """
-    ENS3: Rank-based weighted average.
+    ENS3: Rank-based weighted average (paper Equation 7).
 
-    Models ranked by training-period Gini; weights proportional to rank
-    (rank 1 = worst, rank 3 = best).
+    w_i = (1/R_i) / (1/R_DNN + 1/R_GBT + 1/R_RAF)
+
+    where R_i is the Gini-based performance rank of base learner i.
+    Rank 1 = best (highest Gini), rank 3 = worst (lowest Gini),
+    following Aiolfi & Timmermann (2006).
     """
     ginis = {
         "dnn": _compute_gini(y_train, p_dnn_train),
         "gbt": _compute_gini(y_train, p_gbt_train),
         "raf": _compute_gini(y_train, p_raf_train),
     }
-    # Rank: lowest gini gets rank 1, highest gets rank 3
-    sorted_models = sorted(ginis, key=lambda m: ginis[m])
+    # Rank 1 = best (highest Gini), rank 3 = worst (lowest Gini)
+    sorted_models = sorted(ginis, key=lambda m: ginis[m], reverse=True)
     ranks = {m: r + 1 for r, m in enumerate(sorted_models)}
 
-    total_rank = sum(ranks.values())  # always 6
-    w_dnn = ranks["dnn"] / total_rank
-    w_gbt = ranks["gbt"] / total_rank
-    w_raf = ranks["raf"] / total_rank
+    # Paper Eq. 7: w_i = (1/R_i) / sum(1/R_j)
+    inv_ranks = {m: 1.0 / ranks[m] for m in ranks}
+    total_inv = sum(inv_ranks.values())
+
+    w_dnn = inv_ranks["dnn"] / total_inv
+    w_gbt = inv_ranks["gbt"] / total_inv
+    w_raf = inv_ranks["raf"] / total_inv
 
     return w_dnn * p_dnn + w_gbt * p_gbt + w_raf * p_raf

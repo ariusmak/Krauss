@@ -419,7 +419,26 @@ At minimum, implement:
 
 The paper reports general performance across that grid and then focuses heavily on `k=10`.
 
-## 5.10 Evaluation requirements
+## 5.10 Reproduction targets
+
+The following tables and figures from the published paper (EJOR 2017 version) must be reproduced:
+
+| Target | Description |
+|--------|-------------|
+| Table 1 | Average monthly summary statistics for S&P 500 constituents (Jan 1990–Oct 2015), split by industry: no. of stocks, mean return, std dev, skewness, kurtosis |
+| Figure 1 | Daily performance metrics (mean return, std dev, directional accuracy) for long-short portfolios at k=10,50,100,150,200 across DNN, GBT, RAF, ENS1, ENS2, ENS3 |
+| Table 2 | Daily return characteristics of k=10 portfolio (pre/post costs): long/short leg returns, mean return, NW t-stat, PT test, distributional moments, VaR/CVaR, max drawdown, Calmar, hit rate |
+| Table 3 | Annualized risk-return metrics for k=10 (pre/post costs): mean return, excess return, std dev, downside dev, Sharpe, Sortino |
+| Table 4 | Fama-French factor regressions (FF3, FF3+2, FF5, FF VIX) for ENS1 k=10 after costs |
+| Figure 2 | Sub-period equity curves + VIX overlay for k=10 after costs (DNN, GBT, RAF, ENS1, MKT) |
+| Table 5 | Annualized risk-return per sub-period (12/92–03/01, 04/01–08/08, 09/08–12/09, 01/10–10/15) |
+| Figure 3 | Variable importance bar charts for DNN, GBT, RAF (normalized to 100) |
+| Table 6 | Industry breakdown: share of S&P 500 vs share of ENS1 long/short holdings |
+| Table 7 | Robustness/sensitivity: baseline vs low/high parameterization vs shallow DNN |
+| Table 8 | Pooled time-trend regression within trading periods |
+| Differences ledger | Systematic log of all reproduction deviations vs the original paper |
+
+## 5.11 Evaluation requirements
 
 Implement enough evaluation to reproduce the paper’s main analytical structure.
 
@@ -447,7 +466,7 @@ Required outputs:
 - variable importance analysis
 - comparison vs paper tables/results
 
-## 5.11 Phase 1 acceptance criteria
+## 5.12 Phase 1 acceptance criteria
 
 Phase 1 is done only when:
 - the full pipeline runs end to end,
@@ -819,25 +838,65 @@ Before trusting any run, verify:
 
 ---
 
-## 11) What to do when the paper cannot be matched exactly
+## 11) Deviation logging and parity tracking
 
-Do not hide deviations.
+### 11.1 Core rule
+Do not hide deviations. Maintain an **always-current** deviation log in `docs/reproduction_deviations.md`.
 
+### 11.2 When a deviation is introduced
 If a deviation is unavoidable, do all of the following:
-1. identify it clearly,
-2. explain why it exists,
-3. state whether it is caused by:
+1. Identify it clearly (model, parameter, or data pipeline affected).
+2. Explain why it exists.
+3. Classify its cause:
    - data source change,
    - library change,
    - ambiguous paper detail,
    - implementation simplification,
-4. assess likely impact,
-5. include it in the reproduction differences log.
+   - H2O default vs Python library default mismatch.
+4. Assess likely impact: LOW / MEDIUM / HIGH.
+5. Add it to `docs/reproduction_deviations.md` in the correct section.
+6. Add it to the differences ledger in the reproduction notebook.
 
-Examples:
-- Datastream vs WRDS
-- H2O GBT vs XGBoost
-- H2O DNN vs PyTorch exact maxout implementation differences
+### 11.3 When parity is achieved on a previously logged deviation
+When a deviation is fixed (i.e., our implementation is brought into parity with the paper):
+1. **Move** the entry from the "open deviations" status to "resolved" in the deviation log.
+2. Record **what was done** to achieve parity (e.g., "Set ADADELTA rho=0.99, eps=1e-8 to match H2O defaults").
+3. Record the **date** the fix was applied.
+4. If the fix requires retraining, note whether retraining has been completed or is pending.
+5. Update the notebook differences ledger accordingly.
+
+Do **not** silently delete resolved deviations — keep them visible as resolved with the fix description, so a reader can see the full history.
+
+### 11.4 Required deviation categories
+The deviation log must cover at minimum:
+1. **Data source** — WRDS/CRSP vs Datastream, tables used, identifier mapping, return construction, delisting handling
+2. **Universe construction** — membership rule, daily eligibility, data availability filters
+3. **Study periods** — count, dates, train/trade days
+4. **Features and labels** — formula, scaling, missing data handling, target definition, median tie handling
+5. **Model substitutions** — H2O → Python library for each model family
+6. **Hyperparameter parity** — every parameter, whether matched or deviated, for DNN/GBT/RAF
+7. **DNN-specific training** — framework, maxout implementation, optimizer defaults, initialization, early stopping, batch size, determinism
+8. **Ensemble construction** — formulas, degenerate case handling
+9. **Trading rule** — ranking, tie handling, weighting, dollar neutrality
+10. **Execution convention** — return alignment, close-to-close
+11. **Transaction costs** — level, half-turn convention, turnover definition
+12. **Reproducibility controls** — seeds, threads, versions
+13. **GICS industry classification** — current vs historical, sector remapping
+14. **Ambiguities resolved by implementation choice** — any paper ambiguity where a specific interpretation was chosen
+
+### 11.5 Companion artifacts
+Maintain these three files:
+- `docs/reproduction_deviations.md` — human-readable running log (one section per deviation category)
+- `docs/period_metadata.csv` — one row per study period with dates, counts, class balance
+- `docs/reproduction_comparison.csv` — one row per reported paper metric with paper value, reproduced value, delta, explanation
+
+### 11.6 Continuous update rule
+**Every time** a model parameter, training procedure, data pipeline, or backtest logic is changed:
+1. Check if the change introduces a new deviation → log it.
+2. Check if the change resolves an existing deviation → update its status.
+3. If predictions or backtests need to be re-run due to the change, note this clearly.
+
+Do not batch deviation log updates. Update the log in the same commit or work session as the code change.
 
 ---
 

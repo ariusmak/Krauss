@@ -1,9 +1,6 @@
 # Data (too large for git)
-data/raw/
-data/interim/
-data/processed/
-data/external/
-data/models/
+/data/
+*.parquet
 
 # Python
 __pycache__/

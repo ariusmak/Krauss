@@ -9,6 +9,13 @@ Paper parameters (H2O AdaBoost with shallow trees):
     - Seed fixed to 1
     - XGBoost as agreed Python analogue
       (paper uses H2O GBM/AdaBoost — logged as reproduction deviation)
+
+H2O GBM defaults matched:
+    - reg_lambda=0: H2O has no L2 regularization (XGBoost default is 1)
+    - reg_alpha=0: H2O has no L1 regularization
+    - gamma=1e-5: H2O min_split_improvement=1e-5 (XGBoost default is 0)
+    - max_bin=20: H2O nbins=20 for histogram splits (XGBoost default is 256)
+    - min_child_weight=10: H2O min_rows=10 (XGBoost default is 1)
 """
 
 import numpy as np
@@ -32,6 +39,11 @@ def build_xgb_model(seed: int = SEED) -> xgb.XGBClassifier:
         max_depth=3,
         learning_rate=0.1,
         colsample_bynode=15 / n_features,  # ~0.484, 15 of 31 features per split
+        min_child_weight=10,  # H2O default min_rows=10 (XGB default is 1)
+        reg_lambda=0,  # H2O GBM has no L2 regularization (XGB default=1)
+        reg_alpha=0,   # H2O GBM has no L1 regularization (XGB default=0, explicit)
+        gamma=1e-5,    # H2O GBM min_split_improvement=1e-5 (XGB default=0)
+        max_bin=20,    # H2O GBM nbins=20 (XGB default=256)
         objective="binary:logistic",
         eval_metric="logloss",
         random_state=seed,
