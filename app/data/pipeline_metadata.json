@@ -1,0 +1,107 @@
+{
+  "eras": {
+    "crsp": {
+      "start": "1992-12-17",
+      "end": "2015-10-15",
+      "universe": "S&P 500 constituents (CRSP, no lookahead)"
+    },
+    "extension": {
+      "start": "2015-10-16",
+      "end": "2025-09-24",
+      "universe": "S&P 500 constituents via Datastream (US only)"
+    }
+  },
+  "models": {
+    "RF": {
+      "type": "Random Forest classifier",
+      "hyperparameters": {
+        "n_estimators": 1000,
+        "max_depth": 20,
+        "min_samples_leaf": 5
+      }
+    },
+    "XGB": {
+      "type": "XGBoost classifier",
+      "hyperparameters": {
+        "n_estimators": 500,
+        "max_depth": 6,
+        "learning_rate": 0.05,
+        "subsample": 0.8,
+        "colsample_bytree": 0.8
+      }
+    },
+    "DNN": {
+      "type": "Feed-forward neural net (Keras)",
+      "hyperparameters": {
+        "hidden_layers": [
+          31,
+          31,
+          10
+        ],
+        "dropout": 0.1,
+        "optimizer": "Adam",
+        "lr": 0.001,
+        "epochs": 100,
+        "batch_size": 1024
+      }
+    },
+    "MT-DNN": {
+      "type": "Multi-task DNN predicting both P and U",
+      "hyperparameters": {
+        "shared_trunk": [
+          31,
+          31
+        ],
+        "heads": {
+          "cls": [
+            10
+          ],
+          "reg": [
+            10
+          ]
+        }
+      }
+    },
+    "RF/XGB cls+reg": {
+      "type": "Parallel classifier/regressor pair",
+      "hyperparameters": "same as RF / XGB singletons"
+    },
+    "ENS1": {
+      "type": "Average of RF + XGB + DNN",
+      "hyperparameters": "simple mean"
+    },
+    "ENS2": {
+      "type": "Mean of RF + XGB only",
+      "hyperparameters": "simple mean"
+    },
+    "ENS3": {
+      "type": "Mean of DNN + XGB only",
+      "hyperparameters": "simple mean"
+    }
+  },
+  "scoring_schemes": {
+    "P-only": "rank by P_hat (direction prediction only)",
+    "U-only": "rank by U_hat (excess-return magnitude only)",
+    "Z-comp": "rank by 0.5 * z(P_hat) + 0.5 * z(U_hat) per day",
+    "Product": "rank by (2*P_hat - 1) * U_hat (signed)",
+    "P-gate(0.03)": "longs: P>0.53, top k by U desc; shorts: P<0.47, bottom k by U asc",
+    "P-gate(0.05)": "longs: P>0.55, top k by U desc; shorts: P<0.45, bottom k by U asc"
+  },
+  "backtest": {
+    "k_long": 10,
+    "k_short": 10,
+    "rebalance": "daily, close-to-close",
+    "weighting": "equal weight per leg, dollar neutral",
+    "cost_bps_per_half_turn": 5.0,
+    "cost_regimes": {
+      "no_cost": "pre-cost gross returns",
+      "5bps_half_turn": "5 bps per half-turn (paper convention)"
+    }
+  },
+  "data_sources": {
+    "crsp": "CRSP daily stock file via WRDS",
+    "datastream": "Refinitiv Datastream (US-only extension)",
+    "sp500_index": "WRDS S&P 500 daily index"
+  },
+  "app_build_timestamp": "2026-04-24T18:49:20.938815+00:00Z"
+}

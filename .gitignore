@@ -5,6 +5,9 @@
 # Allow prediction files via LFS
 !data/processed/predictions_*.parquet
 
+# Allow pre-baked app data
+!app/data/*.parquet
+
 # Python
 __pycache__/
 *.py[cod]
