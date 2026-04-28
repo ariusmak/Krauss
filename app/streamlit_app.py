@@ -38,17 +38,26 @@ st.markdown(
     """
 Use the **sidebar** to navigate through the pages.
 
-0. **Background** — plain-English primer on statistical arbitrage, Sharpe, k = 10, P̂/Û, alpha decay. **Start here** if any of those terms are unfamiliar.
-1. **Overview** — headline narrative and equity curve for the full 1992-2025 study, with SPY plotted for context.
-2. **Pipeline** — data flow from raw panel to daily long-short portfolio.
-3. **Models explained** — RF, XGB, DNN, multi-task DNN, cls+reg pairs, and the three ensembles.
-4. **Scoring schemes explained** — P-only, U-only, product, z-score and the P-gate family, plus the interactive directional-disagreement scatter.
-5. **Results matrix** — filterable table of every (era, scheme, model, cost regime) we ran, with linked equity curves.
-6. **Cost analysis** — turnover vs Sharpe with the no-trade-band Pareto frontier.
-7. **What didn't work** — the VIX regime analysis null result.
-9. **Conclusions** — what worked, what didn't, what comes next.
+The deck is structured in eight sections; the appendix at the bottom (pages 9-12) holds deep-dive material referenced from the main flow.
 
-The trading demo (page 8) is a planned follow-up and isn't part of this release.
+**Main flow**
+
+0. **Background** — plain-English primer on statistical arbitrage, Sharpe, k = 10, P̂ / Û, alpha decay. **Start here** if any of those terms are unfamiliar.
+1. **Paper overview** — what Krauss et al. (2017) did, in two paragraphs.
+2. **Reproduction** — our re-runs vs the paper's published numbers (94 % parity).
+3. **Methodology** — what we changed: dual P̂ / Û output and five new scoring schemes.
+4. **Results** — equity curve 1992-2025 with SPY overlay, plus headline KPIs and findings.
+5. **Regime attempts** — three regime frameworks, all null. Why the alpha decay isn't a vol-regime artefact.
+6. **Cost-aware execution** — turnover vs Sharpe, plus the 16-row no-trade-band matrix.
+7. **Simulator** — pick a date window and parameters; replays historical daily returns into equity-curve and risk metrics. *(Forthcoming.)*
+8. **Conclusion** — what worked, what didn't, what to build next.
+
+**Appendix**
+
+9. **Pipeline** — Graphviz of the data flow with stage explanations.
+10. **Models explained** — RF, XGB, DNN, multi-task DNN, cls+reg pairs, three ensembles.
+11. **Scoring schemes** — interactive disagreement scatter and Û-magnitude histogram.
+12. **Results matrix** — filterable grid of every (era, scheme, model, cost regime) we ran.
 
 ---
 
